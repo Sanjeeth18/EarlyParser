@@ -248,7 +248,8 @@ private:
                         complete(chart, i);
                         continue;
                     }
-                    if (std::string next = s.prod.rhs[s.dot]; isNonTerminal(next))
+                    std::string next = s.prod.rhs[s.dot];
+                    if (isNonTerminal(next))
                         predict(chart[i], i, next);
                     else if (i < tokens.size())
                         scan(chart, i, tokens[i]);
@@ -540,13 +541,17 @@ private:
         while (currentPos < end) {
             bool found = false;
             for (size_t i = currentPos + 1; i <= end && !found; i++) {
-                if (i < end && tokens[i - 1].value == ";" && (i >= end || tokens[i].type != TokenType::PUNCTUATION || tokens[i].value != ")")) {
-                    for (const auto& state : chart[i]) {
-                        if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == currentPos) {
-                            root->children.push_back(buildStatement(chart, tokens, currentPos, i));
-                            currentPos = i;
-                            found = true;
-                            break;
+                if (i < end && tokens(i - 1).value == ";") {
+                    bool isPunctuation = (i < tokens.size() && tokens[i].type == TokenType::PUNCTUATION);
+                    bool isClosingParen = isPunctuation && tokens[i].value == ")";
+                    if (!isPunctuation || isClosingParen) {
+                        for (const auto& state : chart[i]) {
+                            if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == currentPos) {
+                                root->children.push_back(buildStatement(chart, tokens, currentPos, i));
+                                currentPos = i;
+                                found = true;
+                                break;
+                            }
                         }
                     }
                 }
