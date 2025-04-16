@@ -1,0 +1,15 @@
+int x = 0;
+int arr[2][3];
+while (x < 2) {
+    int y = 0;
+    while (y < 3) {
+        arr[x][y] = x * y;
+        y = y + 1;
+    }
+    x = x + 1;
+}
+if (arr[1][2] == 2) {
+    print("Correct");
+} else {
+    print("Incorrect");
+}
