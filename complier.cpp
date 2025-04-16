@@ -443,7 +443,7 @@ private:
         return arrayDecl;
     }
 
-    std::unique_ptr<ASTNode> buildDeclaration(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
+    std::::unique_ptr<ASTNode> buildDeclaration(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         bool isArray = false;
         for (size_t i = start + 2; i < end; i++) if (tokens[i].value == "[") { isArray = true; break; }
         if (isArray) return buildArrayDeclaration(tokens, start, end);
@@ -793,6 +793,17 @@ std::vector<Instruction> generate_intermediate_code(const ASTNode& ast, const st
     return code;
 }
 
+class CompilerFacade {
+public:
+    std::vector<Instruction> compile(const std::string& input) {
+        EarleyParser parser;
+        auto ast = parser.parse_input(input);
+        auto vars = semantic_analyze(*ast);
+        auto code = generate_intermediate_code(*ast, vars);
+        return code;
+    }
+};
+
 std::string read_file(const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -807,29 +818,11 @@ std::string read_file(const std::string& filename) {
 int main() {
     try {
         std::string input = read_file("input.txt");
-        std::cout << "Input read successfully\n\n";
-        EarleyParser parser;
-        auto ast = parser.parse_input(input);
-        std::cout << "Parsing successful\n\n";
-        auto vars = semantic_analyze(*ast);
-        std::cout << "Semantic analysis successful\n\n";
-        std::cout << "Declared vars: ";
-        for (const auto& [var, dims] : vars) {
-            std::cout << var;
-            if (!dims.empty()) {
-                std::cout << "[";
-                for (size_t i = 0; i < dims.size(); i++) {
-                    std::cout << dims[i];
-                    if (i < dims.size() - 1) std::cout << "][";
-                }
-                std::cout << "]";
-            }
-            std::cout << " ";
+        CompilerFacade facade;
+        auto code = facade.compile(input);
+        for (const auto& instr : code) {
+            std::cout << instr.op << " " << instr.arg1 << " " << instr.arg2 << " " << instr.result << "\n";
         }
-        std::cout << "\n\n";
-        auto code = generate_intermediate_code(*ast, vars);
-        std::cout << "Code generation successful\n\n";
-        for (const auto& instr : code) std::cout << instr.op << " " << instr.arg1 << " " << instr.arg2 << " " << instr.result << "\n";
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;
