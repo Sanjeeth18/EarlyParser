@@ -12,6 +12,7 @@
 #include <memory>
 #include <format>
 #include <ranges>
+#include <string_view>
 
 class CompilerException : public std::exception {
 public:
@@ -52,13 +53,8 @@ struct Token {
     std::string value;
 };
 
-/**
- * Extracts a string literal from the input, advancing the index past the closing quote.
- * Addresses L56: Separates assignment from expression.
- */
 Token getStringLiteral(const std::string& input, size_t& i) {
-    size_t start = i;
-    i++; // Skip opening quote
+    i++;
     size_t content_start = i;
     while (i < input.length() && input[i] != '"') {
         i++;
@@ -67,14 +63,10 @@ Token getStringLiteral(const std::string& input, size_t& i) {
         throw CompilerException("Unterminated string literal");
     }
     std::string str = input.substr(content_start, i - content_start);
-    i++; // Skip closing quote
+    i++;
     return {TokenType::STRING_LITERAL, str};
 }
 
-/**
- * Extracts an identifier or keyword, separating assignment from condition.
- * Addresses L95: Refactors loop to avoid inline increment.
- */
 Token getIdentifierOrKeyword(const std::string& input, size_t& i) {
     std::string word;
     while (i < input.length() && std::isalnum(input[i])) {
@@ -87,9 +79,6 @@ Token getIdentifierOrKeyword(const std::string& input, size_t& i) {
     return {TokenType::IDENTIFIER, word};
 }
 
-/**
- * Extracts a number, separating assignment from condition.
- */
 Token getNumber(const std::string& input, size_t& i) {
     std::string num;
     while (i < input.length() && std::isdigit(input[i])) {
@@ -177,7 +166,7 @@ private:
         {"Declaration", {"int", "IDENTIFIER", "=", "Expression", ";"}},
         {"Declaration", {"int", "IDENTIFIER", "ArrayDims", ";"}},
         {"ArrayDims", {"[", "NUMBER", "]"}},
-        {"ArrayDims", {"[", "NUMBER", "]", "ArrayDims"}},
+        {"ArrayDims BaekIndentifier", {"[", "NUMBER", "]", "ArrayDims"}},
         {"Assignment", {"LValue", "=", "Expression", ";"}},
         {"LValue", {"IDENTIFIER"}},
         {"LValue", {"IDENTIFIER", "ArrayAccess"}},
@@ -201,10 +190,6 @@ private:
         return std::ranges::any_of(grammar, [symbol](const auto& prod) { return prod.lhs == symbol; });
     }
 
-    /**
-     * Uses 'using enum' to reduce verbosity.
-     * Addresses L381.
-     */
     std::string tokenTypeToString(TokenType type) const {
         using enum TokenType;
         switch (type) {
@@ -281,7 +266,6 @@ private:
                         complete(chart, i);
                         continue;
                     }
-                    // Use init-statement in if, addresses L212
                     if (std::string next = s.prod.rhs[s.dot]; isNonTerminal(next)) {
                         predict(chart[i], i, next);
                     } else if (i < tokens.size()) {
@@ -305,9 +289,6 @@ private:
         return chart;
     }
 
-    /**
-     * Helper function to find matching parenthesis, reduces nesting in build functions.
-     */
     size_t findMatchingParen(const std::vector<Token>& tokens, size_t start, size_t end) {
         int depth = 1;
         size_t pos = start + 1;
@@ -325,13 +306,24 @@ private:
         return pos - 1;
     }
 
-    /**
-     * Helper function to find the end of the next statement, reduces nesting and complexity.
-     * Addresses L228, L231, L246, L251, L418, L550, L567, L574, L588, L684, L686, L691, L694, L696, L698, L786, L789, L872.
-     * Also makes loops less error-prone (L470, L548, L586).
-     */
+    size_t findMatchingBracket(const std::vector<Token>& tokens, size_t start, size_t end) {
+        int depth = 1;
+        size_t pos = start + 1;
+        while (pos < end && depth > 0) {
+            if (tokens[pos].value == "[") {
+                depth++;
+            } else if (tokens[pos].value == "]") {
+                depth--;
+            }
+            pos++;
+        }
+        if (depth != 0) {
+            throw CompilerException(std::format("Mismatched brackets starting at {}", start));
+        }
+        return pos - 1;
+    }
+
     size_t findNextStatementEnd(const std::vector<Token>& tokens, size_t start, size_t end, const std::vector<std::vector<State>>& chart) {
-        // Check for semicolon-terminated statement
         for (size_t i = start + 1; i <= end; i++) {
             if (i < end && tokens[i - 1].value == ";") {
                 for (const auto& state : chart[i]) {
@@ -341,7 +333,6 @@ private:
                 }
             }
         }
-        // Handle block statement
         if (tokens[start].value == "{") {
             int braceCount = 1;
             size_t blockEnd = start + 1;
@@ -361,7 +352,6 @@ private:
                 }
             }
         }
-        // Fallback: search backwards
         for (size_t i = end; i > start; i--) {
             for (const auto& state : chart[i]) {
                 if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == start) {
@@ -378,7 +368,7 @@ private:
         while (current < end && tokens[current].value == "[") {
             size_t numStart = current + 1;
             if (tokens[numStart].type != TokenType::NUMBER) {
-                throw CompilerException("Expected NUMBER.ConcurrentModificationException in array dimension");
+                throw CompilerException("Expected NUMBER in array dimension");
             }
             dims.emplace_back(std::make_unique<ASTNode>("NUMBER", tokens[numStart].value));
             if (tokens[numStart + 1].value != "]") {
@@ -398,7 +388,7 @@ private:
         std::vector<std::unique_ptr<ASTNode>> indices;
         while (current < end && tokens[current].value == "[") {
             size_t exprStart = current + 1;
-            size_t exprEnd = findMatchingBracket(tokens, current, end, "[", "]");
+            size_t exprEnd = findMatchingBracket(tokens, current, end);
             indices.push_back(buildExpression(chart, tokens, exprStart, exprEnd));
             current = exprEnd + 1;
         }
@@ -410,23 +400,6 @@ private:
             arrayAccess->children.push_back(std::move(idx));
         }
         return arrayAccess;
-    }
-
-    size_t findMatchingBracket(const std::vector<Token>& tokens, size_t start, size_t end, const std::string& open, const std::string& close) {
-        int depth = 1;
-        size_t pos = start + 1;
-        while (pos < end && depth > 0) {
-            if (tokens[pos].value == open) {
-                depth++;
-            } else if (tokens[pos].value == close) {
-                depth--;
-            }
-            pos++;
-        }
-        if (depth != 0) {
-            throw CompilerException(std::format("Mismatched brackets starting at {}", start));
-        }
-        return pos - 1;
     }
 
     std::unique_ptr<ASTNode> buildFactor(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
@@ -647,11 +620,6 @@ private:
         throw CompilerException(std::format("Invalid statement from {} to {}. Token context: {}", start, end, tokenContext));
     }
 
-    /**
-     * Refactored to reduce nesting and cognitive complexity using helper function.
-     * Removes unused 'semiPos' (L547, L558).
-     * Reduces complexity from 67 to below 25 (L535).
-     */
     std::unique_ptr<ASTNode> buildStatementList(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         auto root = std::make_unique<ASTNode>("StatementList");
         if (start >= end) {
@@ -857,10 +825,6 @@ struct GenExpr {
     }
 };
 
-/**
- * Reduces cognitive complexity by extracting helper functions where possible.
- * Addresses L446 (29->25), L676 (45->25), L768 (26->25).
- */
 void generateCode(const ASTNode& node, std::vector<Instruction>& code, int& temp_count, int& label_count, const std::map<std::string, std::vector<int>, std::less<>>& declared_vars) {
     if (node.type != "StatementList") {
         return;
