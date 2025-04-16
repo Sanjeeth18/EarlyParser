@@ -55,7 +55,9 @@ struct Token {
 Token getStringLiteral(const std::string& input, size_t& i) {
     i++;
     size_t content_start = i;
-    while (i < input.length() && input[i] != '"') i++;
+    while (i < input.length() && input[i] != '"') {
+        i++;
+    }
     if (i >= input.length()) throw CompilerException("Unterminated string literal");
     std::string str = input.substr(content_start, i - content_start);
     i++;
@@ -64,7 +66,10 @@ Token getStringLiteral(const std::string& input, size_t& i) {
 
 Token getIdentifierOrKeyword(const std::string& input, size_t& i) {
     std::string word;
-    while (i < input.length() && std::isalnum(input[i])) word += input[i++];
+    while (i < input.length() && std::isalnum(input[i])) {
+        word += input[i];
+        i++;
+    }
     if (word == "int" || word == "print" || word == "if" || word == "else" || word == "while") {
         return {TokenType::KEYWORD, word};
     }
@@ -73,7 +78,10 @@ Token getIdentifierOrKeyword(const std::string& input, size_t& i) {
 
 Token getNumber(const std::string& input, size_t& i) {
     std::string num;
-    while (i < input.length() && std::isdigit(input[i])) num += input[i++];
+    while (i < input.length() && std::isdigit(input[i])) {
+        num += input[i];
+        i++;
+    }
     return {TokenType::NUMBER, num};
 }
 
@@ -90,7 +98,8 @@ Token getOperator(const std::string& input, size_t& i) {
 }
 
 Token getPunctuation(const std::string& input, size_t& i) {
-    char c = input[i++];
+    char c = input[i];
+    i++;
     return {TokenType::PUNCTUATION, std::string(1, c)};
 }
 
@@ -100,7 +109,10 @@ std::vector<Token> tokenize(const std::string& input) {
     size_t i = 0;
     while (i < input.length()) {
         char c = input[i];
-        if (std::isspace(c) || c == '\n') { i++; continue; }
+        if (std::isspace(c) || c == '\n') {
+            i++;
+            continue;
+        }
         if (c == '"') tokens.emplace_back(getStringLiteral(input, i));
         else if (std::isalpha(c)) tokens.emplace_back(getIdentifierOrKeyword(input, i));
         else if (std::isdigit(c)) tokens.emplace_back(getNumber(input, i));
@@ -195,8 +207,8 @@ private:
         std::string tokenTypeStr = tokenTypeToString(token.type);
         for (const auto& state : chart[i]) {
             if (state.dot >= state.prod.rhs.size()) continue;
-            std::string nextSymbol = state.prod.rhs[state.dot];
-            if (nextSymbol != tokenTypeStr && nextSymbol != token.value) continue;
+            std::string next = state.prod.rhs[state.dot];
+            if (next != tokenTypeStr && next != token.value) continue;
             State newState(state.prod, state.dot + 1, state.start);
             if (std::ranges::find(chart[i + 1], newState) == chart[i + 1].end()) chart[i + 1].emplace_back(newState);
         }
@@ -204,8 +216,7 @@ private:
 
     void try_complete(const State& completed_state, std::vector<std::vector<State>>& chart, size_t i) {
         for (auto& prev : chart[completed_state.start]) {
-            if (prev.dot >= prev.prod.rhs.size()) continue;
-            if (prev.prod.rhs[prev.dot] != completed_state.prod.lhs) continue;
+            if (prev.dot >= prev.prod.rhs.size() || prev.prod.rhs[prev.dot] != completed_state.prod.lhs) continue;
             State newState(prev.prod, prev.dot + 1, prev.start);
             if (std::ranges::find(chart[i], newState) == chart[i].end()) chart[i].emplace_back(newState);
         }
@@ -234,11 +245,8 @@ private:
                         complete(chart, i);
                         continue;
                     }
-                    if (std::string next = s.prod.rhs[s.dot]; isNonTerminal(next)) {
-                        predict(chart[i], i, next);
-                    } else if (i < tokens.size()) {
-                        scan(chart, i, tokens[i]);
-                    }
+                    if (std::string next = s.prod.rhs[s.dot]; isNonTerminal(next)) predict(chart[i], i, next);
+                    else if (i < tokens.size()) scan(chart, i, tokens[i]);
                 }
             } while (lastSize != chart[i].size());
         }
@@ -279,9 +287,10 @@ private:
 
     bool isSemicolonStatementEnd(const std::vector<Token>& tokens, size_t i, size_t start, const std::vector<std::vector<State>>& chart) {
         if (i >= tokens.size() || tokens[i - 1].value != ";") return false;
-        return std::ranges::any_of(chart[i], [start](const auto& state) {
-            return state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == start;
-        });
+        for (const auto& state : chart[i]) {
+            if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == start) return true;
+        }
+        return false;
     }
 
     size_t findBlockEnd(const std::vector<Token>& tokens, size_t start, size_t end) {
@@ -301,14 +310,16 @@ private:
         }
         if (tokens[start].value == "{") {
             size_t blockEnd = findBlockEnd(tokens, start, end);
-            if (blockEnd <= end && std::ranges::any_of(chart[blockEnd], [start](const auto& state) {
-                return state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == start;
-            })) return blockEnd;
+            if (blockEnd <= end) {
+                for (const auto& state : chart[blockEnd]) {
+                    if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == start) return blockEnd;
+                }
+            }
         }
         for (size_t i = end; i > start; i--) {
-            if (std::ranges::any_of(chart[i], [start](const auto& state) {
-                return state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == start;
-            })) return i;
+            for (const auto& state : chart[i]) {
+                if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == start) return i;
+            }
         }
         throw CompilerException(std::format("No valid statement found from position {} to {}", start, end));
     }
@@ -353,63 +364,59 @@ private:
         throw CompilerException(std::format("Invalid factor from {} to {}", start, end));
     }
 
-    std::unique_ptr<ASTNode> buildTerm(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
-        auto baseCase = [&]() -> std::unique_ptr<ASTNode> {
+    std::unique_ptr<ASTNode> buildTermBaseCase(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
+        for (const auto& state : chart[end]) {
+            if (state.prod.lhs != "Term" || state.dot != state.prod.rhs.size() || state.start != start || state.prod.rhs.size() != 1) continue;
+            return buildFactor(chart, tokens, start, end);
+        }
+        return nullptr;
+    }
+
+    std::unique_ptr<ASTNode> buildTermBinary(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
+        for (size_t i = end - 1; i > start; i--) {
+            if (tokens[i].type != TokenType::OPERATOR) continue;
             for (const auto& state : chart[end]) {
-                if (state.prod.lhs == "Term" && state.dot == state.prod.rhs.size() && state.start == start && state.prod.rhs.size() == 1) {
-                    return buildFactor(chart, tokens, start, end);
-                }
+                if (state.prod.lhs != "Term" || state.dot != state.prod.rhs.size() || state.start != start || state.prod.rhs.size() != 3) continue;
+                auto node = std::make_unique<ASTNode>("BinaryExpression", tokens[i].value);
+                node->children.push_back(buildTerm(chart, tokens, start, i));
+                node->children.push_back(buildFactor(chart, tokens, i + 1, end));
+                return node;
             }
-            return nullptr;
-        };
+        }
+        return nullptr;
+    }
 
-        auto binaryCase = [&]() -> std::unique_ptr<ASTNode> {
-            for (size_t i = end - 1; i > start; i--) {
-                if (tokens[i].type != TokenType::OPERATOR) continue;
-                for (const auto& state : chart[end]) {
-                    if (state.prod.lhs == "Term" && state.dot == state.prod.rhs.size() && state.start == start && state.prod.rhs.size() == 3) {
-                        auto node = std::make_unique<ASTNode>("BinaryExpression", tokens[i].value);
-                        node->children.push_back(buildTerm(chart, tokens, start, i));
-                        node->children.push_back(buildFactor(chart, tokens, i + 1, end));
-                        return node;
-                    }
-                }
-            }
-            return nullptr;
-        };
-
-        if (auto node = baseCase()) return node;
-        if (auto node = binaryCase()) return node;
+    std::unique_ptr<ASTNode> buildTerm(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
+        if (auto node = buildTermBaseCase(chart, tokens, start, end)) return node;
+        if (auto node = buildTermBinary(chart, tokens, start, end)) return node;
         return buildFactor(chart, tokens, start, end);
     }
 
-    std::unique_ptr<ASTNode> buildExpression(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
-        auto baseCase = [&]() -> std::unique_ptr<ASTNode> {
+    std::unique_ptr<ASTNode> buildExpressionBaseCase(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
+        for (const auto& state : chart[end]) {
+            if (state.prod.lhs != "Expression" || state.dot != state.prod.rhs.size() || state.start != start || state.prod.rhs.size() != 1) continue;
+            return buildTerm(chart, tokens, start, end);
+        }
+        return nullptr;
+    }
+
+    std::unique_ptr<ASTNode> buildExpressionBinary(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
+        for (size_t i = end - 1; i > start; i--) {
+            if (tokens[i].type != TokenType::OPERATOR) continue;
             for (const auto& state : chart[end]) {
-                if (state.prod.lhs == "Expression" && state.dot == state.prod.rhs.size() && state.start == start && state.prod.rhs.size() == 1) {
-                    return buildTerm(chart, tokens, start, end);
-                }
+                if (state.prod.lhs != "Expression" || state.dot != state.prod.rhs.size() || state.start != start || state.prod.rhs.size() != 3) continue;
+                auto node = std::make_unique<ASTNode>("BinaryExpression", tokens[i].value);
+                node->children.push_back(buildExpression(chart, tokens, start, i));
+                node->children.push_back(buildTerm(chart, tokens, i + 1, end));
+                return node;
             }
-            return nullptr;
-        };
+        }
+        return nullptr;
+    }
 
-        auto binaryCase = [&]() -> std::unique_ptr<ASTNode> {
-            for (size_t i = end - 1; i > start; i--) {
-                if (tokens[i].type != TokenType::OPERATOR) continue;
-                for (const auto& state : chart[end]) {
-                    if (state.prod.lhs == "Expression" && state.dot == state.prod.rhs.size() && state.start == start && state.prod.rhs.size() == 3) {
-                        auto node = std::make_unique<ASTNode>("BinaryExpression", tokens[i].value);
-                        node->children.push_back(buildExpression(chart, tokens, start, i));
-                        node->children.push_back(buildTerm(chart, tokens, i + 1, end));
-                        return node;
-                    }
-                }
-            }
-            return nullptr;
-        };
-
-        if (auto node = baseCase()) return node;
-        if (auto node = binaryCase()) return node;
+    std::unique_ptr<ASTNode> buildExpression(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
+        if (auto node = buildExpressionBaseCase(chart, tokens, start, end)) return node;
+        if (auto node = buildExpressionBinary(chart, tokens, start, end)) return node;
         return buildTerm(chart, tokens, start, end);
     }
 
@@ -436,16 +443,15 @@ private:
         return arrayDecl;
     }
 
-    std::unique_ptr<ASTNode> buildDeclaration(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
-        bool isArray = std::ranges::any_of(tokens.begin() + start + 2, tokens.begin() + end, [](const Token& t) { return t.value == "["; });
+    std::::unique_ptr<ASTNode> buildDeclaration(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
+        bool isArray = false;
+        for (size_t i = start + 2; i < end; i++) if (tokens[i].value == "[") { isArray = true; break; }
         if (isArray) return buildArrayDeclaration(tokens, start, end);
         if (tokens[start].type != TokenType::KEYWORD || tokens[start + 1].type != TokenType::IDENTIFIER) throw CompilerException("Invalid declaration syntax");
         auto decl = std::make_unique<ASTNode>("Declaration");
         decl->children.emplace_back(std::make_unique<ASTNode>("IDENTIFIER", tokens[start + 1].value));
         if (end - start == 3 && tokens[end - 1].value == ";") return decl;
-        if (end - start >= 5 && tokens[start + 2].value == "=" && tokens[end - 1].value == ";") {
-            decl->children.push_back(buildExpression(chart, tokens, start + 3, end - 1));
-        }
+        if (end - start >= 5 && tokens[start + 2].value == "=" && tokens[end - 1].value == ";") decl->children.push_back(buildExpression(chart, tokens, start + 3, end - 1));
         return decl;
     }
 
@@ -494,12 +500,7 @@ private:
             }
             if (state.prod.rhs.size() == 7) {
                 size_t elsePos = 0;
-                for (size_t i = exprEnd + 1; i < end; i++) {
-                    if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "else") {
-                        elsePos = i;
-                        break;
-                    }
-                }
+                for (size_t i = exprEnd + 1; i < end; i++) if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "else") { elsePos = i; break; }
                 if (!elsePos) throw CompilerException("Cannot find 'else' keyword");
                 auto ifNode = std::make_unique<ASTNode>("IfElseStatement");
                 ifNode->children.push_back(buildExpression(chart, tokens, start + 2, exprEnd));
@@ -574,8 +575,8 @@ void collectDeclarations(const ASTNode& node, std::map<std::string, std::vector<
     if (node.type != "StatementList") return;
     for (const auto& child : node.children) {
         std::cout << "Processing: " << child->type << "\n";
-        if (child->type == "Declaration" && !child->children.empty() && child->children[0]->type == "IDENTIFIER") {
-            declared_vars[child->children[0]->value] = {};
+        if (child->type == "Declaration") {
+            if (!child->children.empty() && child->children[0]->type == "IDENTIFIER") declared_vars[child->children[0]->value] = {};
         } else if (child->type == "ArrayDeclaration") {
             std::vector<int> dims;
             for (const auto& dimNode : child->children) dims.push_back(std::stoi(dimNode->value));
