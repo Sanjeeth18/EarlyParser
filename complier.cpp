@@ -191,15 +191,14 @@ private:
     }
 
     std::string tokenTypeToString(TokenType type) const {
-        using enum TokenType;
         switch (type) {
-            case KEYWORD: return "KEYWORD";
-            case IDENTIFIER: return "IDENTIFIER";
-            case NUMBER: return "NUMBER";
-            case OPERATOR: return "OPERATOR";
-            case PUNCTUATION: return "PUNCTUATION";
-            case STRING_LITERAL: return "STRING_LITERAL";
-            case EOF_TOKEN: return "EOF_TOKEN";
+            case TokenType::KEYWORD: return "KEYWORD";
+            case TokenType::IDENTIFIER: return "IDENTIFIER";
+            case TokenType::NUMBER: return "NUMBER";
+            case TokenType::OPERATOR: return "OPERATOR";
+            case TokenType::PUNCTUATION: return "PUNCTUATION";
+            case TokenType::STRING_LITERAL: return "STRING_LITERAL";
+            case TokenType::EOF_TOKEN: return "EOF_TOKEN";
             default: return "";
         }
     }
@@ -233,22 +232,24 @@ private:
         }
     }
 
+    void try_complete(const State& completed_state, std::vector<std::vector<State>>& chart, size_t i) {
+        for (auto& prev : chart[completed_state.start]) {
+            if (prev.dot < prev.prod.rhs.size() && prev.prod.rhs[prev.dot] == completed_state.prod.lhs) {
+                State newState(prev.prod, prev.dot + 1, prev.start);
+                if (std::ranges::find(chart[i], newState) == chart[i].end()) {
+                    chart[i].emplace_back(newState);
+                }
+            }
+        }
+    }
+
     void complete(std::vector<std::vector<State>>& chart, size_t i) {
         size_t lastSize;
         do {
             lastSize = chart[i].size();
             for (const auto& state : chart[i]) {
-                if (state.dot != state.prod.rhs.size()) {
-                    continue;
-                }
-                for (auto& prev : chart[state.start]) {
-                    if (prev.dot >= prev.prod.rhs.size() || prev.prod.rhs[prev.dot] != state.prod.lhs) {
-                        continue;
-                    }
-                    State newState(prev.prod, prev.dot + 1, prev.start);
-                    if (std::ranges::find(chart[i], newState) == chart[i].end()) {
-                        chart[i].emplace_back(newState);
-                    }
+                if (state.dot == state.prod.rhs.size()) {
+                    try_complete(state, chart, i);
                 }
             }
         } while (lastSize != chart[i].size());
@@ -568,9 +569,10 @@ private:
             }
             if (state.prod.rhs.size() == 7) {
                 size_t elsePos = 0;
-                for (size_t i = exprEnd + 1; i < end && !elsePos; i++) {
+                for (size_t i = exprEnd + 1; i < end; i++) {
                     if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "else") {
                         elsePos = i;
+                        break;
                     }
                 }
                 if (!elsePos) {
@@ -613,11 +615,11 @@ private:
             if (stmtType == "WhileStatement") return buildWhileStatement(chart, tokens, start, end);
             if (stmtType == "Block") return buildBlock(chart, tokens, start, end);
         }
-        std::string tokenContext;
+        std::ostringstream tokenContext;
         for (size_t i = start; i < std::min(start + 5, tokens.size()); i++) {
-            tokenContext += tokens[i].value + " ";
+            tokenContext << tokens[i].value << " ";
         }
-        throw CompilerException(std::format("Invalid statement from {} to {}. Token context: {}", start, end, tokenContext));
+        throw CompilerException(std::format("Invalid statement from {} to {}. Token context: {}", start, end, tokenContext.str()));
     }
 
     std::unique_ptr<ASTNode> buildStatementList(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
@@ -825,6 +827,78 @@ struct GenExpr {
     }
 };
 
+void generateDeclaration(const ASTNode& node, std::vector<Instruction>& code, const GenExpr& gen_expr) {
+    if (node.children.size() > 1) {
+        std::string result = gen_expr(*node.children[1]);
+        code.emplace_back("=", result, "", node.children[0]->value);
+    }
+}
+
+void generateAssignment(const ASTNode& node, std::vector<Instruction>& code, const GenExpr& gen_expr, const std::function<std::string()>& gen_temp, const std::map<std::string, std::vector<int>, std::less<>>& declared_vars) {
+    const ASTNode& lvalue = *node.children[0];
+    std::string value = gen_expr(*node.children[1]);
+    if (lvalue.type == "IDENTIFIER") {
+        code.emplace_back("=", value, "", lvalue.value);
+    } else if (lvalue.type == "ArrayAccess") {
+        std::string var = lvalue.value;
+        const auto& dims = declared_vars.at(var);
+        if (dims.size() != lvalue.children.size()) {
+            throw CompilerException(std::format("Dimension mismatch for array {}", var));
+        }
+        std::string index = gen_expr(*lvalue.children[0]);
+        for (size_t k = 1; k < lvalue.children.size(); k++) {
+            std::string dim = std::to_string(dims[k]);
+            std::string temp1 = gen_temp();
+            code.emplace_back("*", index, dim, temp1);
+            std::string ik = gen_expr(*lvalue.children[k]);
+            std::string temp2 = gen_temp();
+            code.emplace_back("+", temp1, ik, temp2);
+            index = temp2;
+        }
+        code.emplace_back("store_array", var, index, value);
+    }
+}
+
+void generatePrintStatement(const ASTNode& node, std::vector<Instruction>& code, const GenExpr& gen_expr) {
+    if (node.children[0]->type == "STRING_LITERAL") {
+        code.emplace_back("print_str", node.children[0]->value, "", "");
+    } else {
+        std::string result = gen_expr(*node.children[0]);
+        code.emplace_back("print", result, "", "");
+    }
+}
+
+void generateIfStatement(const ASTNode& node, std::vector<Instruction>& code, int& temp_count, int& label_count, const GenExpr& gen_expr, const std::function<std::string()>& gen_label, const std::map<std::string, std::vector<int>, std::less<>>& declared_vars) {
+    std::string cond = gen_expr(*node.children[0]);
+    std::string end_label = gen_label();
+    code.emplace_back("ifz", cond, "", end_label);
+    generateCode(*node.children[1], code, temp_count, label_count, declared_vars);
+    code.emplace_back("label", "", "", end_label);
+}
+
+void generateIfElseStatement(const ASTNode& node, std::vector<Instruction>& code, int& temp_count, int& label_count, const GenExpr& gen_expr, const std::function<std::string()>& gen_label, const std::map<std::string, std::vector<int>, std::less<>>& declared_vars) {
+    std::string cond = gen_expr(*node.children[0]);
+    std::string else_label = gen_label();
+    std::string end_label = gen_label();
+    code.emplace_back("ifz", cond, "", else_label);
+    generateCode(*node.children[1], code, temp_count, label_count, declared_vars);
+    code.emplace_back("goto", "", "", end_label);
+    code.emplace_back("label", "", "", else_label);
+    generateCode(*node.children[2], code, temp_count, label_count, declared_vars);
+    code.emplace_back("label", "", "", end_label);
+}
+
+void generateWhileStatement(const ASTNode& node, std::vector<Instruction>& code, int& temp_count, int& label_count, const GenExpr& gen_expr, const std::function<std::string()>& gen_label, const std::map<std::string, std::vector<int>, std::less<>>& declared_vars) {
+    std::string start_label = gen_label();
+    std::string end_label = gen_label();
+    code.emplace_back("label", "", "", start_label);
+    std::string cond = gen_expr(*node.children[0]);
+    code.emplace_back("ifz", cond, "", end_label);
+    generateCode(*node.children[1], code, temp_count, label_count, declared_vars);
+    code.emplace_back("goto", "", "", start_label);
+    code.emplace_back("label", "", "", end_label);
+}
+
 void generateCode(const ASTNode& node, std::vector<Instruction>& code, int& temp_count, int& label_count, const std::map<std::string, std::vector<int>, std::less<>>& declared_vars) {
     if (node.type != "StatementList") {
         return;
@@ -833,64 +907,18 @@ void generateCode(const ASTNode& node, std::vector<Instruction>& code, int& temp
     auto gen_label = [&label_count]() { return "L" + std::to_string(label_count++); };
     GenExpr gen_expr(code, gen_temp, declared_vars);
     for (const auto& child : node.children) {
-        if (child->type == "Declaration" && child->children.size() > 1) {
-            std::string result = gen_expr(*child->children[1]);
-            code.emplace_back("=", result, "", child->children[0]->value);
+        if (child->type == "Declaration") {
+            generateDeclaration(*child, code, gen_expr);
         } else if (child->type == "Assignment") {
-            const ASTNode& lvalue = *child->children[0];
-            std::string value = gen_expr(*child->children[1]);
-            if (lvalue.type == "IDENTIFIER") {
-                code.emplace_back("=", value, "", lvalue.value);
-            } else if (lvalue.type == "ArrayAccess") {
-                std::string var = lvalue.value;
-                const auto& dims = declared_vars.at(var);
-                if (dims.size() != lvalue.children.size()) {
-                    throw CompilerException(std::format("Dimension mismatch for array {}", var));
-                }
-                std::string index = gen_expr(*lvalue.children[0]);
-                for (size_t k = 1; k < lvalue.children.size(); k++) {
-                    std::string dim = std::to_string(dims[k]);
-                    std::string temp1 = gen_temp();
-                    code.emplace_back("*", index, dim, temp1);
-                    std::string ik = gen_expr(*lvalue.children[k]);
-                    std::string temp2 = gen_temp();
-                    code.emplace_back("+", temp1, ik, temp2);
-                    index = temp2;
-                }
-                code.emplace_back("store_array", var, index, value);
-            }
+            generateAssignment(*child, code, gen_expr, gen_temp, declared_vars);
         } else if (child->type == "PrintStatement") {
-            if (child->children[0]->type == "STRING_LITERAL") {
-                code.emplace_back("print_str", child->children[0]->value, "", "");
-            } else {
-                std::string result = gen_expr(*child->children[0]);
-                code.emplace_back("print", result, "", "");
-            }
+            generatePrintStatement(*child, code, gen_expr);
         } else if (child->type == "IfStatement") {
-            std::string cond = gen_expr(*child->children[0]);
-            std::string end_label = gen_label();
-            code.emplace_back("ifz", cond, "", end_label);
-            generateCode(*child->children[1], code, temp_count, label_count, declared_vars);
-            code.emplace_back("label", "", "", end_label);
+            generateIfStatement(*child, code, temp_count, label_count, gen_expr, gen_label, declared_vars);
         } else if (child->type == "IfElseStatement") {
-            std::string cond = gen_expr(*child->children[0]);
-            std::string else_label = gen_label();
-            std::string end_label = gen_label();
-            code.emplace_back("ifz", cond, "", else_label);
-            generateCode(*child->children[1], code, temp_count, label_count, declared_vars);
-            code.emplace_back("goto", "", "", end_label);
-            code.emplace_back("label", "", "", else_label);
-            generateCode(*child->children[2], code, temp_count, label_count, declared_vars);
-            code.emplace_back("label", "", "", end_label);
+            generateIfElseStatement(*child, code, temp_count, label_count, gen_expr, gen_label, declared_vars);
         } else if (child->type == "WhileStatement") {
-            std::string start_label = gen_label();
-            std::string end_label = gen_label();
-            code.emplace_back("label", "", "", start_label);
-            std::string cond = gen_expr(*child->children[0]);
-            code.emplace_back("ifz", cond, "", end_label);
-            generateCode(*child->children[1], code, temp_count, label_count, declared_vars);
-            code.emplace_back("goto", "", "", start_label);
-            code.emplace_back("label", "", "", end_label);
+            generateWhileStatement(*child, code, temp_count, label_count, gen_expr, gen_label, declared_vars);
         }
     }
 }
