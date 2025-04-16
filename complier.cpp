@@ -248,8 +248,7 @@ private:
                         complete(chart, i);
                         continue;
                     }
-                    std::string next = s.prod.rhs[s.dot];
-                    if (isNonTerminal(next))
+                    if (std::string next = s.prod.rhs[s.dot]; isNonTerminal(next))
                         predict(chart[i], i, next);
                     else if (i < tokens.size())
                         scan(chart, i, tokens[i]);
@@ -541,7 +540,7 @@ private:
         while (currentPos < end) {
             bool found = false;
             for (size_t i = currentPos + 1; i <= end && !found; i++) {
-                if (i < end && tokens(i - 1).value == ";") {
+                if (i < end && tokens[i - 1].value == ";") {
                     bool isPunctuation = (i < tokens.size() && tokens[i].type == TokenType::PUNCTUATION);
                     bool isClosingParen = isPunctuation && tokens[i].value == ")";
                     if (!isPunctuation || isClosingParen) {
