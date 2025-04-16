@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <format>
+#include <ranges>
 
 class CompilerException : public std::exception {
 public:
@@ -52,8 +53,7 @@ struct Token {
 };
 
 Token getStringLiteral(const std::string& input, size_t& i) {
-    size_t start = i;
-    i++;
+    size_t start = i++;
     while (i < input.length() && input[i] != '"')
         i++;
     if (i == input.length())
@@ -92,8 +92,7 @@ Token getOperator(const std::string& input, size_t& i) {
 }
 
 Token getPunctuation(const std::string& input, size_t& i) {
-    char c = input[i];
-    i++;
+    char c = input[i++];
     return {TokenType::PUNCTUATION, std::string(1, c)};
 }
 
@@ -106,19 +105,18 @@ std::vector<Token> tokenize(const std::string& input) {
             i++;
             continue;
         }
-        if (c == '"') {
+        if (c == '"')
             tokens.emplace_back(getStringLiteral(input, i));
-        } else if (std::isalpha(c)) {
+        else if (std::isalpha(c))
             tokens.emplace_back(getIdentifierOrKeyword(input, i));
-        } else if (std::isdigit(c)) {
+        else if (std::isdigit(c))
             tokens.emplace_back(getNumber(input, i));
-        } else if (c == '+' || c == '-' || c == '*' || c == '/' || c == '=' || c == '<' || c == '>') {
+        else if (c == '+' || c == '-' || c == '*' || c == '/' || c == '=' || c == '<' || c == '>')
             tokens.emplace_back(getOperator(input, i));
-        } else if (c == ';' || c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']') {
+        else if (c == ';' || c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']')
             tokens.emplace_back(getPunctuation(input, i));
-        } else {
+        else
             throw CompilerException(std::format("Invalid character: '{}'", c));
-        }
     }
     tokens.emplace_back(TokenType::EOF_TOKEN, "");
     return tokens;
@@ -177,87 +175,88 @@ private:
         {"Factor", {"(", "Expression", ")"}}
     };
 
-    bool isNonTerminal(const std::string& symbol) const {
-        return std::any_of(grammar.begin(), grammar.end(), [&symbol](const auto& prod) { return prod.lhs == symbol; });
+    bool isNonTerminal(std::string_view symbol) const {
+        return std::ranges::any_of(grammar, [symbol](const auto& prod) { return prod.lhs == symbol; });
     }
 
     std::string tokenTypeToString(TokenType type) const {
+        using enum TokenType;
         switch (type) {
-            case TokenType::KEYWORD: return "KEYWORD";
-            case TokenType::IDENTIFIER: return "IDENTIFIER";
-            case TokenType::NUMBER: return "NUMBER";
-            case TokenType::OPERATOR: return "OPERATOR";
-            case TokenType::PUNCTUATION: return "PUNCTUATION";
-            case TokenType::STRING_LITERAL: return "STRING_LITERAL";
-            case TokenType::EOF_TOKEN: return "EOF_TOKEN";
+            case KEYWORD: return "KEYWORD";
+            case IDENTIFIER: return "IDENTIFIER";
+            case NUMBER: return "NUMBER";
+            case OPERATOR: return "OPERATOR";
+            case PUNCTUATION: return "PUNCTUATION";
+            case STRING_LITERAL: return "STRING_LITERAL";
+            case EOF_TOKEN: return "EOF_TOKEN";
             default: return "";
         }
     }
 
-    void predict(std::vector<State>& chart, size_t i, const std::string& nonTerminal) {
+    void predict(std::vector<State>& chart, size_t i, std::string_view nonTerminal) {
         for (const auto& prod : grammar) {
-            if (prod.lhs == nonTerminal) {
-                State newState(prod, 0, i);
-                if (std::find(chart.begin(), chart.end(), newState) == chart.end())
-                    chart.emplace_back(prod, 0, i);
-            }
+            if (prod.lhs != nonTerminal)
+                continue;
+            State newState(prod, 0, i);
+            if (std::ranges::find(chart, newState) == chart.end())
+                chart.emplace_back(prod, 0, i);
         }
     }
 
     void scan(std::vector<std::vector<State>>& chart, size_t i, const Token& token) {
+        std::string tokenTypeStr = tokenTypeToString(token.type);
         for (const auto& state : chart[i]) {
-            if (state.dot < state.prod.rhs.size()) {
-                std::string next = state.prod.rhs[state.dot];
-                std::string tokenTypeStr = tokenTypeToString(token.type);
-                if (next == tokenTypeStr || next == token.value) {
-                    State newState(state.prod, state.dot + 1, state.start);
-                    if (std::find(chart[i + 1].begin(), chart[i + 1].end(), newState) == chart[i + 1].end())
-                        chart[i + 1].emplace_back(state.prod, state.dot + 1, state.start);
-                }
-            }
+            if (state.dot >= state.prod.rhs.size())
+                continue;
+            std::string next = state.prod.rhs[state.dot];
+            if (next != tokenTypeStr && next != token.value)
+                continue;
+            State newState(state.prod, state.dot + 1, state.start);
+            if (std::ranges::find(chart[i + 1], newState) == chart[i + 1].end())
+                chart[i + 1].emplace_back(newState);
         }
     }
 
     void complete(std::vector<std::vector<State>>& chart, size_t i) {
-        size_t lastSize = 0;
-        while (lastSize != chart[i].size()) {
+        size_t lastSize;
+        do {
             lastSize = chart[i].size();
             for (const auto& state : chart[i]) {
-                if (state.dot == state.prod.rhs.size()) {
-                    for (auto& prev : chart[state.start]) {
-                        if (prev.dot < prev.prod.rhs.size() && prev.prod.rhs[prev.dot] == state.prod.lhs) {
-                            State newState(prev.prod, prev.dot + 1, prev.start);
-                            if (std::find(chart[i].begin(), chart[i].end(), newState) == chart[i].end())
-                                chart[i].emplace_back(prev.prod, prev.dot + 1, prev.start);
-                        }
-                    }
+                if (state.dot != state.prod.rhs.size())
+                    continue;
+                for (auto& prev : chart[state.start]) {
+                    if (prev.dot >= prev.prod.rhs.size() || prev.prod.rhs[prev.dot] != state.prod.lhs)
+                        continue;
+                    State newState(prev.prod, prev.dot + 1, prev.start);
+                    if (std::ranges::find(chart[i], newState) == chart[i].end())
+                        chart[i].emplace_back(newState);
                 }
             }
-        }
+        } while (lastSize != chart[i].size());
     }
 
     std::vector<std::vector<State>> parse(const std::vector<Token>& tokens) {
         std::vector<std::vector<State>> chart(tokens.size() + 1);
         chart[0].emplace_back(Production{"Program", {"StatementList"}}, 0, 0);
         for (size_t i = 0; i <= tokens.size(); i++) {
-            size_t lastSize = 0;
-            while (lastSize != chart[i].size()) {
+            size_t lastSize;
+            do {
                 lastSize = chart[i].size();
                 for (const auto& s : chart[i]) {
-                    if (s.dot < s.prod.rhs.size()) {
-                        std::string next = s.prod.rhs[s.dot];
-                        if (isNonTerminal(next))
-                            predict(chart[i], i, next);
-                        else if (i < tokens.size())
-                            scan(chart, i, tokens[i]);
-                    } else {
+                    if (s.dot >= s.prod.rhs.size()) {
                         complete(chart, i);
+                        continue;
                     }
+                    std::string next = s.prod.rhs[s.dot];
+                    if (isNonTerminal(next))
+                        predict(chart[i], i, next);
+                    else if (i < tokens.size())
+                        scan(chart, i, tokens[i]);
                 }
-            }
+            } while (lastSize != chart[i].size());
         }
-        if (auto accept = State(Production{{"Program", {"StatementList"}}, 1, 0}); 
-            std::find(chart[tokens.size()].begin(), chart[tokens.size()].end(), accept) == chart[tokens.size()].end()) {
+        State accept(Production{{"Program", {"StatementList"}}, 1, 0});
+        if (std::ranges::find(chart[tokens.size()], accept) == chart[tokens.size()].end()) {
             size_t max_i = 0;
             for (size_t i = 0; i <= tokens.size(); ++i)
                 if (!chart[i].empty())
@@ -303,9 +302,7 @@ private:
             }
             if (depth != 0)
                 throw CompilerException("Mismatched brackets");
-            exprEnd--;
-            auto expr = buildExpression(chart, tokens, exprStart, exprEnd);
-            indices.push_back(std::move(expr));
+            indices.push_back(buildExpression(chart, tokens, exprStart, exprEnd - 1));
             current = exprEnd + 1;
         }
         if (indices.empty())
@@ -318,14 +315,14 @@ private:
 
     std::unique_ptr<ASTNode> buildFactor(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         for (const auto& state : chart[end]) {
-            if (state.prod.lhs == "Factor" && state.dot == state.prod.rhs.size() && state.start == start) {
-                if (state.prod.rhs[0] == "NUMBER")
-                    return std::make_unique<ASTNode>("NUMBER", tokens[start].value);
-                else if (state.prod.rhs[0] == "LValue")
-                    return buildLValue(chart, tokens, start, end);
-                else if (state.prod.rhs[0] == "(")
-                    return buildExpression(chart, tokens, start + 1, end - 1);
-            }
+            if (state.prod.lhs != "Factor" || state.dot != state.prod.rhs.size() || state.start != start)
+                continue;
+            if (state.prod.rhs[0] == "NUMBER")
+                return std::make_unique<ASTNode>("NUMBER", tokens[start].value);
+            if (state.prod.rhs[0] == "LValue")
+                return buildLValue(chart, tokens, start, end);
+            if (state.prod.rhs[0] == "(")
+                return buildExpression(chart, tokens, start + 1, end - 1);
         }
         throw CompilerException(std::format("Invalid factor from {} to {}", start, end));
     }
@@ -333,19 +330,19 @@ private:
     std::unique_ptr<ASTNode> buildTerm(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         for (size_t i = end - 1; i >= start; i--) {
             for (const auto& state : chart[end]) {
-                if (state.prod.lhs == "Term" && state.dot == state.prod.rhs.size() && state.start == start) {
-                    if (state.prod.rhs.size() == 1)
-                        return buildFactor(chart, tokens, start, end);
-                    else if (state.prod.rhs.size() == 3 && tokens[i].type == TokenType::OPERATOR) {
-                        auto node = std::make_unique<ASTNode>("BinaryExpression", tokens[i].value);
-                        node->children.push_back(buildTerm(chart, tokens, start, i));
-                        node->children.push_back(buildFactor(chart, tokens, i + 1, end));
-                        return node;
-                    }
+                if (state.prod.lhs != "Term" || state.dot != state.prod.rhs.size() || state.start != start)
+                    continue;
+                if (state.prod.rhs.size() == 1)
+                    return buildFactor(chart, tokens, start, end);
+                if (state.prod.rhs.size() == 3 && tokens[i].type == TokenType::OPERATOR) {
+                    auto node = std::make_unique<ASTNode>("BinaryExpression", tokens[i].value);
+                    node->children.push_back(buildTerm(chart, tokens, start, i));
+                    node->children.push_back(buildFactor(chart, tokens, i + 1, end));
+                    return node;
                 }
             }
             if (i == start)
-                break;
+                return buildFactor(chart, tokens, start, end);
         }
         return buildFactor(chart, tokens, start, end);
     }
@@ -353,19 +350,19 @@ private:
     std::unique_ptr<ASTNode> buildExpression(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         for (size_t i = end - 1; i >= start; i--) {
             for (const auto& state : chart[end]) {
-                if (state.prod.lhs == "Expression" && state.dot == state.prod.rhs.size() && state.start == start) {
-                    if (state.prod.rhs.size() == 1)
-                        return buildTerm(chart, tokens, start, end);
-                    else if (state.prod.rhs.size() == 3 && tokens[i].type == TokenType::OPERATOR) {
-                        auto node = std::make_unique<ASTNode>("BinaryExpression", tokens[i].value);
-                        node->children.push_back(buildExpression(chart, tokens, start, i));
-                        node->children.push_back(buildTerm(chart, tokens, i + 1, end));
-                        return node;
-                    }
+                if (state.prod.lhs != "Expression" || state.dot != state.prod.rhs.size() || state.start != start)
+                    continue;
+                if (state.prod.rhs.size() == 1)
+                    return buildTerm(chart, tokens, start, end);
+                if (state.prod.rhs.size() == 3 && tokens[i].type == TokenType::OPERATOR) {
+                    auto node = std::make_unique<ASTNode>("BinaryExpression", tokens[i].value);
+                    node->children.push_back(buildExpression(chart, tokens, start, i));
+                    node->children.push_back(buildTerm(chart, tokens, i + 1, end));
+                    return node;
                 }
             }
             if (i == start)
-                break;
+                return buildTerm(chart, tokens, start, end);
         }
         return buildTerm(chart, tokens, start, end);
     }
@@ -390,48 +387,40 @@ private:
             }
         }
         if (isArray) {
-            if (tokens[startuffle.type != TokenType::KEYWORD || tokens[start].value != "int" || tokens[start + 1].type != TokenType::IDENTIFIER)
+            if (tokens[start].type != TokenType::KEYWORD || tokens[start].value != "int" || tokens[start + 1].type != TokenType::IDENTIFIER)
                 throw CompilerException("Invalid array declaration syntax");
             std::string varName = tokens[start + 1].value;
             auto arrayDecl = std::make_unique<ASTNode>("ArrayDeclaration", varName);
             size_t i = start + 2;
-            while (i < end && i + 2 < end) {
-                if (tokens[i].value == "[" && tokens[i + 1].type == TokenType::NUMBER && tokens[i + 2].value == "]") {
-                    arrayDecl->children.emplace_back(std::make_unique<ASTNode>("NUMBER", tokens[i + 1].value));
-                    i += 3;
-                } else {
-                    break;
-                }
+            while (i < end && i + 2 < end && tokens[i].value == "[" && tokens[i + 1].type == TokenType::NUMBER && tokens[i + 2].value == "]") {
+                arrayDecl->children.emplace_back(std::make_unique<ASTNode>("NUMBER", tokens[i + 1].value));
+                i += 3;
             }
             return arrayDecl;
         }
-        if (tokens[start].type == TokenType::KEYWORD && tokens[start + 1].type == TokenType::IDENTIFIER) {
-            if (end - start == 3 && tokens[end - 1].value == ";") {
-                auto decl = std::make_unique<ASTNode>("Declaration");
-                decl->children.emplace_back(std::make_unique<ASTNode>("IDENTIFIER", tokens[start + 1].value));
-                return decl;
-            } else if (end - start >= 5 && tokens[start + 2].value == "=" && tokens[end - 1].value == ";") {
-                auto decl = std::make_unique<ASTNode>("Declaration");
-                decl->children.emplace_back(std::make_unique<ASTNode>("IDENTIFIER", tokens[start + 1].value));
-                decl->children.push_back(buildExpression(chart, tokens, start + 3, end - 1));
-                return decl;
-            }
-        }
-        throw CompilerException("Invalid declaration syntax");
+        if (tokens[start].type != TokenType::KEYWORD || tokens[start + 1].type != TokenType::IDENTIFIER)
+            throw CompilerException("Invalid declaration syntax");
+        auto decl = std::make_unique<ASTNode>("Declaration");
+        decl->children.emplace_back(std::make_unique<ASTNode>("IDENTIFIER", tokens[start + 1].value));
+        if (end - start == 3 && tokens[end - 1].value == ";")
+            return decl;
+        if (end - start >= 5 && tokens[start + 2].value == "=" && tokens[end - 1].value == ";")
+            decl->children.push_back(buildExpression(chart, tokens, start + 3, end - 1));
+        return decl;
     }
 
     std::unique_ptr<ASTNode> buildAssignment(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         for (size_t k = start + 1; k < end; k++) {
             for (const auto& state : chart[k]) {
-                if (state.prod.lhs == "LValue" && state.dot == state.prod.rhs.size() && state.start == start && tokens[k].value == "=") {
-                    for (size_t m = k + 1; m < end; m++) {
-                        for (const auto& state2 : chart[m]) {
-                            if (state2.prod.lhs == "Expression" && state2.dot == state2.prod.rhs.size() && state2.start == k + 1 && tokens[m].value == ";") {
-                                auto assign = std::make_unique<ASTNode>("Assignment");
-                                assign->children.push_back(buildLValue(chart, tokens, start, k));
-                                assign->children.push_back(buildExpression(chart, tokens, k + 1, m));
-                                return assign;
-                            }
+                if (state.prod.lhs != "LValue" || state.dot != state.prod.rhs.size() || state.start != start || tokens[k].value != "=")
+                    continue;
+                for (size_t m = k + 1; m < end; m++) {
+                    for (const auto& state2 : chart[m]) {
+                        if (state2.prod.lhs == "Expression" && state2.dot == state2.prod.rhs.size() && state2.start == k + 1 && tokens[m].value == ";") {
+                            auto assign = std::make_unique<ASTNode>("Assignment");
+                            assign->children.push_back(buildLValue(chart, tokens, start, k));
+                            assign->children.push_back(buildExpression(chart, tokens, k + 1, m));
+                            return assign;
                         }
                     }
                 }
@@ -442,72 +431,52 @@ private:
 
     std::unique_ptr<ASTNode> buildPrintStatement(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         for (const auto& state : chart[end]) {
-            if (state.prod.lhs == "PrintStatement" && state.dot == state.prod.rhs.size() && state.start == start) {
-                auto print = std::make_unique<ASTNode>("PrintStatement");
-                if (state.prod.rhs == std::vector<std::string>{"print", "(", "STRING_LITERAL", ")", ";"})
-                    print->children.emplace_back(std::make_unique<ASTNode>("STRING_LITERAL", tokens[start + 2].value));
-                else if (state.prod.rhs == std::vector<std::string>{"print", "(", "Expression", ")", ";"})
-                    print->children.push_back(buildExpression(chart, tokens, start + 2, end - 2));
-                return print;
-            }
+            if (state.prod.lhs != "PrintStatement" || state.dot != state.prod.rhs.size() || state.start != start)
+                continue;
+            auto print = std::make_unique<ASTNode>("PrintStatement");
+            if (state.prod.rhs == std::vector<std::string>{"print", "(", "STRING_LITERAL", ")", ";"})
+                print->children.emplace_back(std::make_unique<ASTNode>("STRING_LITERAL", tokens[start + 2].value));
+            else if (state.prod.rhs == std::vector<std::string>{"print", "(", "Expression", ")", ";"})
+                print->children.push_back(buildExpression(chart, tokens, start + 2, end - 2));
+            return print;
         }
         throw CompilerException(std::format("Invalid print statement from {} to {}", start, end));
     }
 
     std::unique_ptr<ASTNode> buildIfStatement(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         for (const auto& state : chart[end]) {
-            if (state.prod.lhs == "IfStatement" && state.dot == state.prod.rhs.size() && state.start == start) {
-                if (state.prod.rhs.size() == 5) {
-                    size_t exprStart = start + 1;
-                    size_t parenDepth = 1;
-                    size_t exprEnd = exprStart + 1;
-                    while (exprEnd < end && parenDepth > 0) {
-                        if (tokens[exprEnd].value == "(")
-                            parenDepth++;
-                        else if (tokens[exprEnd].value == ")")
-                            parenDepth--;
-                        exprEnd++;
-                    }
-                    if (parenDepth != 0)
-                        throw CompilerException("Mismatched parentheses in if");
-                    auto ifNode = std::make_unique<ASTNode>("IfStatement");
-                    ifNode->children.push_back(buildExpression(chart, tokens, exprStart + 1, exprEnd - 1));
-                    size_t blockStart = exprEnd;
-                    size_t blockEnd = end;
-                    ifNode->children.push_back(buildBlock(chart, tokens, blockStart, blockEnd));
-                    return ifNode;
-                } else if (state.prod.rhs.size() == 7) {
-                    size_t exprStart = start + 1;
-                    size_t parenDepth = 1;
-                    size_t exprEnd = exprStart + 1;
-                    while (exprEnd < end && parenDepth > 0) {
-                        if (tokens[exprEnd].value == "(")
-                            parenDepth++;
-                        else if (tokens[exprEnd].value == ")")
-                            parenDepth--;
-                        exprEnd++;
-                    }
-                    if (parenDepth != 0)
-                        throw CompilerException("Mismatched parentheses in if");
-                    size_t elsePos = 0;
-                    for (size_t i = exprEnd; i < end; i++) {
-                        if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "else") {
-                            elsePos = i;
-                            break;
-                        }
-                    }
-                    if (elsePos == 0)
-                        throw CompilerException("Cannot find else keyword");
-                    auto ifNode = std::make_unique<ASTNode>("IfElseStatement");
-                    ifNode->children.push_back(buildExpression(chart, tokens, exprStart + 1, exprEnd - 1));
-                    size_t ifBlockStart = exprEnd;
-                    size_t ifBlockEnd = elsePos;
-                    ifNode->children.push_back(buildBlock(chart, tokens, ifBlockStart, ifBlockEnd));
-                    size_t elseBlockStart = elsePos + 1;
-                    size_t elseBlockEnd = end;
-                    ifNode->children.push_back(buildBlock(chart, tokens, elseBlockStart, elseBlockEnd));
-                    return ifNode;
-                }
+            if (state.prod.lhs != "IfStatement" || state.dot != state.prod.rhs.size() || state.start != start)
+                continue;
+            size_t exprStart = start + 1;
+            size_t parenDepth = 1;
+            size_t exprEnd = exprStart + 1;
+            while (exprEnd < end && parenDepth > 0) {
+                if (tokens[exprEnd].value == "(")
+                    parenDepth++;
+                else if (tokens[exprEnd].value == ")")
+                    parenDepth--;
+                exprEnd++;
+            }
+            if (parenDepth != 0)
+                throw CompilerException("Mismatched parentheses in if");
+            if (state.prod.rhs.size() == 5) {
+                auto ifNode = std::make_unique<ASTNode>("IfStatement");
+                ifNode->children.push_back(buildExpression(chart, tokens, exprStart + 1, exprEnd - 1));
+                ifNode->children.push_back(buildBlock(chart, tokens, exprEnd, end));
+                return ifNode;
+            }
+            if (state.prod.rhs.size() == 7) {
+                size_t elsePos = 0;
+                for (size_t i = exprEnd; i < end && elsePos == 0; i++)
+                    if (tokens[i].type == TokenType::KEYWORD && tokens[i].value == "else")
+                        elsePos = i;
+                if (elsePos == 0)
+                    throw CompilerException("Cannot find else keyword");
+                auto ifNode = std::make_unique<ASTNode>("IfElseStatement");
+                ifNode->children.push_back(buildExpression(chart, tokens, exprStart + 1, exprEnd - 1));
+                ifNode->children.push_back(buildBlock(chart, tokens, exprEnd, elsePos));
+                ifNode->children.push_back(buildBlock(chart, tokens, elsePos + 1, end));
+                return ifNode;
             }
         }
         throw CompilerException(std::format("Invalid if statement from {} to {}", start, end));
@@ -515,48 +484,46 @@ private:
 
     std::unique_ptr<ASTNode> buildWhileStatement(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         for (const auto& state : chart[end]) {
-            if (state.prod.lhs == "WhileStatement" && state.dot == state.prod.rhs.size() && state.start == start) {
-                auto whileNode = std::make_unique<ASTNode>("WhileStatement");
-                size_t exprStart = start + 1;
-                size_t parenDepth = 1;
-                size_t exprEnd = exprStart + 1;
-                while (exprEnd < end && parenDepth > 0) {
-                    if (tokens[exprEnd].value == "(")
-                        parenDepth++;
-                    else if (tokens[exprEnd].value == ")")
-                        parenDepth--;
-                    exprEnd++;
-                }
-                if (parenDepth != 0)
-                    throw CompilerException("Mismatched parentheses in while");
-                whileNode->children.push_back(buildExpression(chart, tokens, exprStart + 1, exprEnd - 1));
-                size_t blockStart = exprEnd;
-                size_t blockEnd = end;
-                whileNode->children.push_back(buildBlock(chart, tokens, blockStart, blockEnd));
-                return whileNode;
+            if (state.prod.lhs != "WhileStatement" || state.dot != state.prod.rhs.size() || state.start != start)
+                continue;
+            size_t exprStart = start + 1;
+            size_t parenDepth = 1;
+            size_t exprEnd = exprStart + 1;
+            while (exprEnd < end && parenDepth > 0) {
+                if (tokens[exprEnd].value == "(")
+                    parenDepth++;
+                else if (tokens[exprEnd].value == ")")
+                    parenDepth--;
+                exprEnd++;
             }
+            if (parenDepth != 0)
+                throw CompilerException("Mismatched parentheses in while");
+            auto whileNode = std::make_unique<ASTNode>("WhileStatement");
+            whileNode->children.push_back(buildExpression(chart, tokens, exprStart + 1, exprEnd - 1));
+            whileNode->children.push_back(buildBlock(chart, tokens, exprEnd, end));
+            return whileNode;
         }
         throw CompilerException(std::format("Invalid while statement from {} to {}", start, end));
     }
 
     std::unique_ptr<ASTNode> buildStatement(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         for (const auto& state : chart[end]) {
-            if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == start) {
-                if (state.prod.rhs.size() == 1) {
-                    std::string stmtType = state.prod.rhs[0];
-                    if (stmtType == "Declaration")
-                        return buildDeclaration(chart, tokens, start, end);
-                    else if (stmtType == "Assignment")
-                        return buildAssignment(chart, tokens, start, end);
-                    else if (stmtType == "PrintStatement")
-                        return buildPrintStatement(chart, tokens, start, end);
-                    else if (stmtType == "IfStatement")
-                        return buildIfStatement(chart, tokens, start, end);
-                    else if (stmtType == "WhileStatement")
-                        return buildWhileStatement(chart, tokens, start, end);
-                    else if (stmtType == "Block")
-                        return buildBlock(chart, tokens, start, end);
-                }
+            if (state.prod.lhs != "Statement" || state.dot != state.prod.rhs.size() || state.start != start)
+                continue;
+            if (state.prod.rhs.size() == 1) {
+                std::string stmtType = state.prod.rhs[0];
+                if (stmtType == "Declaration")
+                    return buildDeclaration(chart, tokens, start, end);
+                if (stmtType == "Assignment")
+                    return buildAssignment(chart, tokens, start, end);
+                if (stmtType == "PrintStatement")
+                    return buildPrintStatement(chart, tokens, start, end);
+                if (stmtType == "IfStatement")
+                    return buildIfStatement(chart, tokens, start, end);
+                if (stmtType == "WhileStatement")
+                    return buildWhileStatement(chart, tokens, start, end);
+                if (stmtType == "Block")
+                    return buildBlock(chart, tokens, start, end);
             }
         }
         std::string tokenContext;
@@ -576,59 +543,57 @@ private:
         }
         currentPos = start;
         while (currentPos < end) {
-            bool found = false;
-            for (size_t i = currentPos + 1; i <= end; ++i) {
-                if (i < end && tokens[i - 1].value == ";" && 
-                    (i >= end || tokens[i].type != TokenType::PUNCTUATION || tokens[i].value != ")")) {
+            bool foundSemi = false;
+            size_t semiPos = currentPos;
+            for (size_t i = currentPos + 1; i <= end && !foundSemi; i++) {
+                if (i < end && tokens[i - 1].value == ";" && (i >= end || tokens[i].type != TokenType::PUNCTUATION || tokens[i].value != ")")) {
                     for (const auto& state : chart[i]) {
                         if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == currentPos) {
                             root->children.push_back(buildStatement(chart, tokens, currentPos, i));
                             currentPos = i;
-                            found = true;
+                            foundSemi = true;
                             break;
                         }
                     }
-                    if (found)
-                        break;
-                } else if (tokens[currentPos].value == "{") {
-                    int braceCount = 1;
-                    size_t blockEnd = currentPos + 1;
-                    while (blockEnd < end && braceCount > 0) {
-                        if (tokens[blockEnd].value == "{")
-                            braceCount++;
-                        else if (tokens[blockEnd].value == "}")
-                            braceCount--;
-                        blockEnd++;
-                    }
-                    if (braceCount == 0) {
-                        for (const auto& state : chart[blockEnd]) {
-                            if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == currentPos) {
-                                root->children.push_back(buildStatement(chart, tokens, currentPos, blockEnd));
-                                currentPos = blockEnd;
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (found)
-                            break;
-                    }
+                    semiPos = i;
                 }
             }
-            if (!found) {
-                for (size_t i = end; i > currentPos; --i) {
-                    for (const auto& state : chart[i]) {
+            if (foundSemi)
+                continue;
+            if (tokens[currentPos].value == "{") {
+                int braceCount = 1;
+                size_t blockEnd = currentPos + 1;
+                while (blockEnd < end && braceCount > 0) {
+                    if (tokens[blockEnd].value == "{")
+                        braceCount++;
+                    else if (tokens[blockEnd].value == "}")
+                        braceCount--;
+                    blockEnd++;
+                }
+                if (braceCount == 0) {
+                    for (const auto& state : chart[blockEnd]) {
                         if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == currentPos) {
-                            root->children.push_back(buildStatement(chart, tokens, currentPos, i));
-                            currentPos = i;
-                            found = true;
+                            root->children.push_back(buildStatement(chart, tokens, currentPos, blockEnd));
+                            currentPos = blockEnd;
+                            foundSemi = true;
                             break;
                         }
                     }
-                    if (found)
+                }
+                if (foundSemi)
+                    continue;
+            }
+            for (size_t i = end; i > currentPos && !foundSemi; i--) {
+                for (const auto& state : chart[i]) {
+                    if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == currentPos) {
+                        root->children.push_back(buildStatement(chart, tokens, currentPos, i));
+                        currentPos = i;
+                        foundSemi = true;
                         break;
+                    }
                 }
             }
-            if (!found) {
+            if (!foundSemi) {
                 std::string context;
                 for (size_t j = currentPos; j < std::min(currentPos + 10, tokens.size()); j++)
                     context += tokens[j].value + " ";
@@ -655,222 +620,225 @@ public:
     }
 };
 
-std::map<std::string, std::vector<int>> semantic_analyze(const ASTNode& ast) {
-    std::cout << "Starting semantic analysis\n";
-    std::map<std::string, std::vector<int>> declared_vars;
-    std::function<void(const ASTNode&)> collect_declarations = [&](const ASTNode& node) {
-        if (node.type == "StatementList") {
-            for (const auto& child : node.children) {
-                std::cout << "Processing: " << child->type << "\n";
-                if (child->type == "Declaration") {
-                    if (!child->children.empty() && child->children[0]->type == "IDENTIFIER")
-                        declared_vars[child->children[0]->value] = {};
-                } else if (child->type == "ArrayDeclaration") {
-                    std::vector<int> dims;
-                    for (const auto& dimNode : child->children)
-                        dims.push_back(std::stoi(dimNode->value));
-                    declared_vars[child->value] = dims;
-                } else if (child->type == "IfStatement" || child->type == "IfElseStatement") {
-                    collect_declarations(*child->children[1]);
-                    if (child->type == "IfElseStatement")
-                        collect_declarations(*child->children[2]);
-                } else if (child->type == "WhileStatement") {
-                    collect_declarations(*child->children[1]);
-                }
-            }
+void collectDeclarations(const ASTNode& node, std::map<std::string, std::vector<int>, std::less<>>& declared_vars) {
+    if (node.type != "StatementList")
+        return;
+    for (const auto& child : node.children) {
+        std::cout << "Processing: " << child->type << "\n";
+        if (child->type == "Declaration") {
+            if (!child->children.empty() && child->children[0]->type == "IDENTIFIER")
+                declared_vars[child->children[0]->value] = {};
+        } else if (child->type == "ArrayDeclaration") {
+            std::vector<int> dims;
+            for (const auto& dimNode : child->children)
+                dims.push_back(std::stoi(dimNode->value));
+            declared_vars[child->value] = dims;
+        } else if (child->type == "IfStatement" || child->type == "IfElseStatement") {
+            collectDeclarations(*child->children[1], declared_vars);
+            if (child->type == "IfElseStatement")
+                collectDeclarations(*child->children[2], declared_vars);
+        } else if (child->type == "WhileStatement") {
+            collectDeclarations(*child->children[1], declared_vars);
         }
-    };
-    collect_declarations(ast);
-    std::cout << "\nDeclarations collected\n";
-    struct CheckExpr {
-        const std::map<std::string, std::vector<int>>& declared_vars;
-        CheckExpr(const std::map<std::string, std::vector<int>>& vars) : declared_vars(vars) {}
-        void operator()(const ASTNode& node, const CheckExpr& self) const {
-            if (node.type == "NUMBER")
-                return;
-            if (node.type == "IDENTIFIER") {
-                std::string var = node.value;
-                if (declared_vars.find(var) == declared_vars.end())
-                    throw CompilerException("Undeclared variable: " + var);
-                if (!declared_vars.at(var).empty())
-                    throw CompilerException("Variable " + var + " is an array, cannot use directly");
-            } else if (node.type == "ArrayAccess") {
-                std::string var = node.value;
-                if (declared_vars.find(var) == declared_vars.end())
-                    throw CompilerException("Undeclared array: " + var);
-                const auto& dims = declared_vars.at(var);
+    }
+}
+
+struct CheckExpr {
+    const std::map<std::string, std::vector<int>, std::less<>>& declared_vars;
+    explicit CheckExpr(const std::map<std::string, std::vector<int>, std::less<>>& vars) : declared_vars(vars) {}
+    void operator()(const ASTNode& node) const {
+        if (node.type == "NUMBER")
+            return;
+        if (node.type == "IDENTIFIER") {
+            std::string var = node.value;
+            if (!declared_vars.contains(var))
+                throw CompilerException(std::format("Undeclared variable: {}", var));
+            if (!declared_vars.at(var).empty())
+                throw CompilerException(std::format("Variable {} is an array, cannot use directly", var));
+        } else if (node.type == "ArrayAccess") {
+            std::string var = node.value;
+            if (!declared_vars.contains(var))
+                throw CompilerException(std::format("Undeclared array: {}", var));
+            const auto& dims = declared_vars.at(var);
+            if (dims.empty())
+                throw CompilerException(std::format("Variable {} is not an array", var));
+            if (node.children.size() != dims.size())
+                throw CompilerException(std::format("Dimension mismatch for array {}", var));
+            for (const auto& idx : node.children)
+                (*this)(*idx);
+        } else if (node.type == "BinaryExpression") {
+            (*this)(*node.children[0]);
+            (*this)(*node.children[1]);
+        }
+    }
+};
+
+void checkUsage(const ASTNode& node, const CheckExpr& check_expr) {
+    if (node.type != "StatementList")
+        return;
+    for (const auto& child : node.children) {
+        if (child->type == "Assignment") {
+            const ASTNode& lvalue = *child->children[0];
+            if (lvalue.type == "IDENTIFIER") {
+                std::string var = lvalue.value;
+                if (!check_expr.declared_vars.contains(var))
+                    throw CompilerException(std::format("Undeclared variable: {}", var));
+                if (!check_expr.declared_vars.at(var).empty())
+                    throw CompilerException(std::format("Variable {} is an array, cannot assign directly", var));
+                check_expr(*child->children[1]);
+            } else if (lvalue.type == "ArrayAccess") {
+                std::string var = lvalue.value;
+                if (!check_expr.declared_vars.contains(var))
+                    throw CompilerException(std::format("Undeclared array: {}", var));
+                const auto& dims = check_expr.declared_vars.at(var);
                 if (dims.empty())
-                    throw CompilerException("Variable " + var + " is not an array");
-                if (node.children.size() != dims.size())
-                    throw CompilerException("Dimension mismatch for array " + var);
-                for (const auto& idx : node.children)
-                    self(*idx, self);
-            } else if (node.type == "BinaryExpression") {
-                self(*node.children[0], self);
-                self(*node.children[1], self);
+                    throw CompilerException(std::format("Variable {} is not an array", var));
+                if (lvalue.children.size() != dims.size())
+                    throw CompilerException(std::format("Dimension mismatch for array {}", var));
+                for (const auto& idx : lvalue.children)
+                    check_expr(*idx);
+                check_expr(*child->children[1]);
             }
+        } else if (child->type == "PrintStatement") {
+            if (child->children[0]->type != "STRING_LITERAL")
+                check_expr(*child->children[0]);
+        } else if (child->type == "IfStatement" || child->type == "IfElseStatement") {
+            check_expr(*child->children[0]);
+            checkUsage(*child->children[1], check_expr);
+            if (child->type == "IfElseStatement")
+                checkUsage(*child->children[2], check_expr);
+        } else if (child->type == "WhileStatement") {
+            check_expr(*child->children[0]);
+            checkUsage(*child->children[1], check_expr);
         }
-    };
+    }
+}
+
+std::map<std::string, std::vector<int>, std::less<>> semantic_analyze(const ASTNode& ast) {
+    std::cout << "Starting semantic analysis\n";
+    std::map<std::string, std::vector<int>, std::less<>> declared_vars;
+    collectDeclarations(ast, declared_vars);
+    std::cout << "\nDeclarations collected\n";
     CheckExpr check_expr(declared_vars);
-    std::function<void(const ASTNode&)> check_usage = [&](const ASTNode& node) {
-        if (node.type == "StatementList") {
-            for (const auto& child : node.children) {
-                if (child->type == "Assignment") {
-                    const ASTNode& lvalue = *child->children[0];
-                    if (lvalue.type == "IDENTIFIER") {
-                        std::string var = lvalue.value;
-                        if (declared_vars.find(var) == declared_vars.end())
-                            throw CompilerException("Undeclared variable: " + var);
-                        if (!declared_vars.at(var).empty())
-                            throw CompilerException("Variable " + var + " is an array, cannot assign directly");
-                        check_expr(*child->children[1], check_expr);
-                    } else if (lvalue.type == "ArrayAccess") {
-                        std::string var = lvalue.value;
-                        if (declared_vars.find(var) == declared_vars.end())
-                            throw CompilerException("Undeclared array: " + var);
-                        const auto& dims = declared_vars.at(var);
-                        if (dims.empty())
-                            throw CompilerException("Variable " + var + " is not an array");
-                        if (lvalue.children.size() != dims.size())
-                            throw CompilerException("Dimension mismatch for array " + var);
-                        for (const auto& idx : lvalue.children)
-                            check_expr(*idx, check_expr);
-                        check_expr(*child->children[1], check_expr);
-                    }
-                } else if (child->type == "PrintStatement") {
-                    if (child->children[0]->type != "STRING_LITERAL")
-                        check_expr(*child->children[0], check_expr);
-                } else if (child->type == "IfStatement" || child->type == "IfElseStatement") {
-                    check_expr(*child->children[0], check_expr);
-                    check_usage(*child->children[1]);
-                    if (child->type == "IfElseStatement")
-                        check_usage(*child->children[2]);
-                } else if (child->type == "WhileStatement") {
-                    check_expr(*child->children[0], check_expr);
-                    check_usage(*child->children[1]);
-                }
-            }
-        }
-    };
-    check_usage(ast);
+    checkUsage(ast, check_expr);
     return declared_vars;
 }
 
-std::vector<Instruction> generate_intermediate_code(const ASTNode& ast, const std::map<std::string, std::vector<int>>& declared_vars) {
-    std::cout << "Generating intermediate code\n";
-    std::vector<Instruction> code;
-    int temp_count = 0;
-    int label_count = 0;
+struct GenExpr {
+    std::vector<Instruction>& code;
+    const std::function<std::string()>& gen_temp;
+    const std::map<std::string, std::vector<int>, std::less<>>& declared_vars;
+    GenExpr(std::vector<Instruction>& c, const std::function<std::string()>& gt, const std::map<std::string, std::vector<int>, std::less<>>& dv)
+        : code(c), gen_temp(gt), declared_vars(dv) {}
+    std::string operator()(const ASTNode& node) const {
+        if (node.type == "NUMBER")
+            return node.value;
+        if (node.type == "IDENTIFIER")
+            return node.value;
+        if (node.type == "ArrayAccess") {
+            std::string var = node.value;
+            const auto& dims = declared_vars.at(var);
+            if (dims.size() != node.children.size())
+                throw CompilerException(std::format("Dimension mismatch for array {}", var));
+            std::string index = (*this)(*node.children[0]);
+            for (size_t k = 1; k < node.children.size(); k++) {
+                std::string dim = std::to_string(dims[k]);
+                std::string temp1 = gen_temp();
+                code.emplace_back("*", index, dim, temp1);
+                std::string ik = (*this)(*node.children[k]);
+                std::string temp2 = gen_temp();
+                code.emplace_back("+", temp1, ik, temp2);
+                index = temp2;
+            }
+            std::string result = gen_temp();
+            code.emplace_back("load_array", var, index, result);
+            return result;
+        }
+        if (node.type == "BinaryExpression") {
+            std::string left = (*this)(*node.children[0]);
+            std::string right = (*this)(*node.children[1]);
+            std::string temp = gen_temp();
+            code.emplace_back(node.value, left, right, temp);
+            return temp;
+        }
+        throw CompilerException(std::format("Unknown expression type: {}", node.type));
+    }
+};
+
+void generateCode(const ASTNode& node, std::vector<Instruction>& code, int& temp_count, int& label_count, const std::map<std::string, std::vector<int>, std::less<>>& declared_vars) {
+    if (node.type != "StatementList")
+        return;
     auto gen_temp = [&temp_count]() { return "t" + std::to_string(temp_count++); };
     auto gen_label = [&label_count]() { return "L" + std::to_string(label_count++); };
-    struct GenExpr {
-        std::vector<Instruction>& code;
-        std::function<std::string()> gen_temp;
-        const std::map<std::string, std::vector<int>>& declared_vars;
-        GenExpr(std::vector<Instruction>& c, std::function<std::string()> gt, const std::map<std::string, std::vector<int>>& dv)
-            : code(c), gen_temp(gt), declared_vars(dv) {}
-        std::string operator()(const ASTNode& node, const GenExpr& self) const {
-            if (node.type == "NUMBER")
-                return node.value;
-            if (node.type == "IDENTIFIER")
-                return node.value;
-            if (node.type == "ArrayAccess") {
-                std::string var = node.value;
+    GenExpr gen_expr(code, gen_temp, declared_vars);
+    for (const auto&MarkDownchild : node.children) {
+        if (child->type == "Declaration" && child->children.size() > 1) {
+            std::string result = gen_expr(*child->children[1]);
+            code.emplace_back("=", result, "", child->children[0]->value);
+        } else if (child->type == "Assignment") {
+            const ASTNode& lvalue = *child->children[0];
+            std::string value = gen_expr(*child->children[1]);
+            if (lvalue.type == "IDENTIFIER")
+                code.emplace_back("=", value, "", lvalue.value);
+            else if (lvalue.type == "ArrayAccess") {
+                std::string var = lvalue.value;
                 const auto& dims = declared_vars.at(var);
-                if (dims.size() != node.children.size())
-                    throw CompilerException("Dimension mismatch for array " + var);
-                std::string index = self(*node.children[0], self);
-                for (size_t k = 1; k < node.children.size(); k++) {
+                if (dims.size() != lvalue.children.size())
+                    throw CompilerException(std::format("Dimension mismatch for array {}", var));
+                std::string index = gen_expr(*lvalue.children[0]);
+                for (size_t k = 1; k < lvalue.children.size(); k++) {
                     std::string dim = std::to_string(dims[k]);
                     std::string temp1 = gen_temp();
                     code.emplace_back("*", index, dim, temp1);
-                    std::string ik = self(*node.children[k], self);
+                    std::string ik = gen_expr(*lvalue.children[k]);
                     std::string temp2 = gen_temp();
                     code.emplace_back("+", temp1, ik, temp2);
                     index = temp2;
                 }
-                std::string result = gen_temp();
-                code.emplace_back("load_array", var, index, result);
-                return result;
+                code.emplace_back("store_array", var, index, value);
             }
-            if (node.type == "BinaryExpression") {
-                std::string left = self(*node.children[0], self);
-                std::string right = self(*node.children[1], self);
-                std::string temp = gen_temp();
-                code.emplace_back(node.value, left, right, temp);
-                return temp;
+        } else if (child->type == "PrintStatement") {
+            if (child->children[0]->type == "STRING_LITERAL")
+                code.emplace_back("print_str", child->children[0]->value, "", "");
+            else {
+                std::string result = gen_expr(*child->children[0]);
+                code.emplace_back("print", result, "", "");
             }
-            throw CompilerException("Unknown expression type: " + node.type);
+        } else if (child->type == "IfStatement") {
+            std::string cond = gen_expr(*child->children[0]);
+            std::string end_label = gen_label();
+            code.emplace_back("ifz", cond, "", end_label);
+            generateCode(*child->children[1], code, temp_count, label_count, declared_vars);
+            code.emplace_back("label", "", "", end_label);
+        } else if (child->type == "IfElseStatement") {
+            std::string cond = gen_expr(*child->children[0]);
+            std::string else_label = gen_label();
+            std::string end_label = gen_label();
+            code.emplace_back("ifz", cond, "", else_label);
+            generateCode(*child->children[1], code, temp_count, label_count, declared_vars);
+            code.emplace_back("goto", "", "", end_label);
+            code.emplace_back("label", "", "", else_label);
+            generateCode(*child->children[2], code, temp_count, label_count, declared_vars);
+            code.emplace_back("label", "", "", end_label);
+        } else if (child->type == "WhileStatement") {
+            std::string start_label = gen_label();
+            std::string end_label = gen_label();
+            code.emplace_back("label", "", "", start_label);
+            std::string cond = gen_expr(*child->children[0]);
+            code.emplace_back("ifz", cond, "", end_label);
+            generateCode(*child->children[1], code, temp_count, label_count, declared_vars);
+            code.emplace_back("goto", "", "", start_label);
+            code.emplace_back("label", "", "", end_label);
         }
-    };
-    GenExpr gen_expr(code, gen_temp, declared_vars);
-    std::function<void(const ASTNode&)> generate = [&](const ASTNode& node) {
-        if (node.type == "StatementList") {
-            for (const auto& child : node.children) {
-                if (child->type == "Declaration") {
-                    if (child->children.size() > 1) {
-                        std::string result = gen_expr(*child->children[1], gen_expr);
-                        code.emplace_back("=", result, "", child->children[0]->value);
-                    }
-                } else if (child->type == "Assignment") {
-                    const ASTNode& lvalue = *child->children[0];
-                    std::string value = gen_expr(*child->children[1], gen_expr);
-                    if (lvalue.type == "IDENTIFIER")
-                        code.emplace_back("=", value, "", lvalue.value);
-                    else if (lvalue.type == "ArrayAccess") {
-                        std::string var = lvalue.value;
-                        const auto& dims = declared_vars.at(var);
-                        if (dims.size() != lvalue.children.size())
-                            throw CompilerException("Dimension mismatch for array " + var);
-                        std::string index = gen_expr(*lvalue.children[0], gen_expr);
-                        for (size_t k = 1; k < lvalue.children.size(); k++) {
-                            std::string dim = std::to_string(dims[k]);
-                            std::string temp1 = gen_temp();
-                            code.emplace_back("*", index, dim, temp1);
-                            std::string ik = gen_expr(*lvalue.children[k], gen_expr);
-                            std::string temp2 = gen_temp();
-                            code.emplace_back("+", temp1, ik, temp2);
-                            index = temp2;
-                        }
-                        code.emplace_back("store_array", var, index, value);
-                    }
-                } else if (child->type == "PrintStatement") {
-                    if (child->children[0]->type == "STRING_LITERAL")
-                        code.emplace_back("print_str", child->children[0]->value, "", "");
-                    else {
-                        std::string result = gen_expr(*child->children[0], gen_expr);
-                        code.emplace_back("print", result, "", "");
-                    }
-                } else if (child->type == "IfStatement") {
-                    std::string cond = gen_expr(*child->children[0], gen_expr);
-                    std::string end_label = gen_label();
-                    code.emplace_back("ifz", cond, "", end_label);
-                    generate(*child->children[1]);
-                    code.emplace_back("label", "", "", end_label);
-                } else if (child->type == "IfElseStatement") {
-                    std::string cond = gen_expr(*child->children[0], gen_expr);
-                    std::string else_label = gen_label();
-                    std::string end_label = gen_label();
-                    code.emplace_back("ifz", cond, "", else_label);
-                    generate(*child->children[1]);
-                    code.emplace_back("goto", "", "", end_label);
-                    code.emplace_back("label", "", "", else_label);
-                    generate(*child->children[2]);
-                    code.emplace_back("label", "", "", end_label);
-                } else if (child->type == "WhileStatement") {
-                    std::string start_label = gen_label();
-                    std::string end_label = gen_label();
-                    code.emplace_back("label", "", "", start_label);
-                    std::string cond = gen_expr(*child->children[0], gen_expr);
-                    code.emplace_back("ifz", cond, "", end_label);
-                    generate(*child->children[1]);
-                    code.emplace_back("goto", "", "", start_label);
-                    code.emplace_back("label", "", "", end_label);
-                }
-            }
-        }
-    };
-    generate(ast);
+    }
+}
+
+std::vector<Instruction> generate_intermediate_code(const ASTNode& ast, const std::map<std::string, std::vector<int>, std::less<>>& declared_vars) {
+    std::cout << "Generating intermediate code\n";
+    std::vector<Instruction> code;
+    int temp_count = 0;
+    int label_count = 0;
+    generateCode(ast, code, temp_count, label_count, declared_vars);
     return code;
 }
 
@@ -895,13 +863,13 @@ int main() {
         auto vars = semantic_analyze(*ast);
         std::cout << "Semantic analysis successful\n\n";
         std::cout << "Declared vars: ";
-        for (const auto& var : vars) {
-            std::cout << var.first;
-            if (!var.second.empty()) {
+        for (const auto& [var, dims] : vars) {
+            std::cout << var;
+            if (!dims.empty()) {
                 std::cout << "[";
-                for (size_t i = 0; i < var.second.size(); i++) {
-                    std::cout << var.second[i];
-                    if (i < var.second.size() - 1)
+                for (size_t i = 0; i < dims.size(); i++) {
+                    std::cout << dims[i];
+                    if (i < dims.size() - 1)
                         std::cout << "][";
                 }
                 std::cout << "]";
