@@ -53,13 +53,14 @@ struct Token {
 };
 
 Token getStringLiteral(const std::string& input, size_t& i) {
-    size_t start = i++;
+    size_t start = i;
+    i += 1;
     while (i < input.length() && input[i] != '"')
-        i++;
+        i += 1;
     if (i == input.length())
         throw CompilerException("Unterminated string literal");
     std::string str = input.substr(start + 1, i - start - 1);
-    i++;
+    i += 1;
     return {TokenType::STRING_LITERAL, str};
 }
 
@@ -87,12 +88,13 @@ Token getOperator(const std::string& input, size_t& i) {
         i += 2;
         return {TokenType::OPERATOR, op};
     }
-    i++;
+    i += 1;
     return {TokenType::OPERATOR, std::string(1, c)};
 }
 
 Token getPunctuation(const std::string& input, size_t& i) {
-    char c = input[i++];
+    char c = input[i];
+    i += 1;
     return {TokenType::PUNCTUATION, std::string(1, c)};
 }
 
@@ -102,7 +104,7 @@ std::vector<Token> tokenize(const std::string& input) {
     while (i < input.length()) {
         char c = input[i];
         if (std::isspace(c) || c == '\n') {
-            i++;
+            i += 1;
             continue;
         }
         if (c == '"')
@@ -208,8 +210,7 @@ private:
         for (const auto& state : chart[i]) {
             if (state.dot >= state.prod.rhs.size())
                 continue;
-            std::string next = state.prod.rhs[state.dot];
-            if (next != tokenTypeStr && next != token.value)
+            if (std::string next = state.prod.rhs[state.dot]; next != tokenTypeStr && next != token.value)
                 continue;
             State newState(state.prod, state.dot + 1, state.start);
             if (std::ranges::find(chart[i + 1], newState) == chart[i + 1].end())
@@ -247,8 +248,7 @@ private:
                         complete(chart, i);
                         continue;
                     }
-                    std::string next = s.prod.rhs[s.dot];
-                    if (isNonTerminal(next))
+                    if (std::string next = s.prod.rhs[s.dot]; isNonTerminal(next))
                         predict(chart[i], i, next);
                     else if (i < tokens.size())
                         scan(chart, i, tokens[i]);
@@ -270,15 +270,13 @@ private:
 
     std::vector<std::unique_ptr<ASTNode>> buildArrayDims(const std::vector<Token>& tokens, size_t start, size_t end) {
         std::vector<std::unique_ptr<ASTNode>> dims;
-        size_t current = start;
-        while (current < end && tokens[current].value == "[") {
+        for (size_t current = start; current < end && tokens[current].value == "["; current += 3) {
             size_t numStart = current + 1;
             if (tokens[numStart].type != TokenType::NUMBER)
                 throw CompilerException("Expected NUMBER in array dimension");
             dims.emplace_back(std::make_unique<ASTNode>("NUMBER", tokens[numStart].value));
             if (tokens[numStart + 1].value != "]")
                 throw CompilerException("Expected ']'");
-            current = numStart + 2;
         }
         return dims;
     }
@@ -379,34 +377,32 @@ private:
     }
 
     std::unique_ptr<ASTNode> buildDeclaration(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
-        bool isArray = false;
-        for (size_t i = start + 2; i < end; i++) {
-            if (tokens[i].value == "[") {
-                isArray = true;
-                break;
-            }
-        }
-        if (isArray) {
-            if (tokens[start].type != TokenType::KEYWORD || tokens[start].value != "int" || tokens[start + 1].type != TokenType::IDENTIFIER)
-                throw CompilerException("Invalid array declaration syntax");
-            std::string varName = tokens[start + 1].value;
-            auto arrayDecl = std::make_unique<ASTNode>("ArrayDeclaration", varName);
-            size_t i = start + 2;
-            while (i < end && i + 2 < end && tokens[i].value == "[" && tokens[i + 1].type == TokenType::NUMBER && tokens[i + 2].value == "]") {
-                arrayDecl->children.emplace_back(std::make_unique<ASTNode>("NUMBER", tokens[i + 1].value));
-                i += 3;
-            }
-            return arrayDecl;
-        }
-        if (tokens[start].type != TokenType::KEYWORD || tokens[start + 1].type != TokenType::IDENTIFIER)
+        if (tokens[start].type != TokenType::KEYWORD || tokens[start].value != "int" || tokens[start + 1].type != TokenType::IDENTIFIER)
             throw CompilerException("Invalid declaration syntax");
         auto decl = std::make_unique<ASTNode>("Declaration");
         decl->children.emplace_back(std::make_unique<ASTNode>("IDENTIFIER", tokens[start + 1].value));
-        if (end - start == 3 && tokens[end - 1].value == ";")
+        size_t i = start + 2;
+        if (i < end && tokens[i].value == "[") {
+            std::vector<int> dims;
+            while (i < end && tokens[i].value == "[") {
+                if (i + 2 >= end || tokens[i + 1].type != TokenType::NUMBER || tokens[i + 2].value != "]")
+                    throw CompilerException("Invalid array dimension");
+                dims.push_back(std::stoi(tokens[i + 1].value));
+                i += 3;
+            }
+            decl->type = "ArrayDeclaration";
+            decl->value = tokens[start + 1].value;
+            for (int dim : dims)
+                decl->children.emplace_back(std::make_unique<ASTNode>("NUMBER", std::to_string(dim)));
+        } else if (i < end && tokens[i].value == "=") {
+            size_t exprStart = i + 1;
+            size_t exprEnd = end - 1;
+            decl->children.push_back(buildExpression(chart, tokens, exprStart, exprEnd));
+            i = exprEnd + 1;
+        }
+        if (i < end && tokens[i].value == ";")
             return decl;
-        if (end - start >= 5 && tokens[start + 2].value == "=" && tokens[end - 1].value == ";")
-            decl->children.push_back(buildExpression(chart, tokens, start + 3, end - 1));
-        return decl;
+        throw CompilerException("Invalid declaration syntax");
     }
 
     std::unique_ptr<ASTNode> buildAssignment(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
@@ -534,33 +530,28 @@ private:
 
     std::unique_ptr<ASTNode> buildStatementList(const std::vector<std::vector<State>>& chart, const std::vector<Token>& tokens, size_t start, size_t end) {
         auto root = std::make_unique<ASTNode>("StatementList");
-        size_t currentPos = start;
         if (start >= end)
             return root;
         if (tokens[start].value == "{" && tokens[end - 1].value == "}") {
             start++;
             end--;
         }
-        currentPos = start;
+        size_t currentPos = start;
         while (currentPos < end) {
-            bool foundSemi = false;
-            size_t semiPos = currentPos;
-            for (size_t i = currentPos + 1; i <= end && !foundSemi; i++) {
+            bool found = false;
+            for (size_t i = currentPos + 1; i <= end && !found; i++) {
                 if (i < end && tokens[i - 1].value == ";" && (i >= end || tokens[i].type != TokenType::PUNCTUATION || tokens[i].value != ")")) {
                     for (const auto& state : chart[i]) {
                         if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == currentPos) {
                             root->children.push_back(buildStatement(chart, tokens, currentPos, i));
                             currentPos = i;
-                            foundSemi = true;
+                            found = true;
                             break;
                         }
                     }
-                    semiPos = i;
                 }
             }
-            if (foundSemi)
-                continue;
-            if (tokens[currentPos].value == "{") {
+            if (!found && tokens[currentPos].value == "{") {
                 int braceCount = 1;
                 size_t blockEnd = currentPos + 1;
                 while (blockEnd < end && braceCount > 0) {
@@ -575,25 +566,25 @@ private:
                         if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == currentPos) {
                             root->children.push_back(buildStatement(chart, tokens, currentPos, blockEnd));
                             currentPos = blockEnd;
-                            foundSemi = true;
+                            found = true;
                             break;
                         }
                     }
                 }
-                if (foundSemi)
-                    continue;
             }
-            for (size_t i = end; i > currentPos && !foundSemi; i--) {
-                for (const auto& state : chart[i]) {
-                    if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == currentPos) {
-                        root->children.push_back(buildStatement(chart, tokens, currentPos, i));
-                        currentPos = i;
-                        foundSemi = true;
-                        break;
+            if (!found) {
+                for (size_t i = end; i > currentPos && !found; i--) {
+                    for (const auto& state : chart[i]) {
+                        if (state.prod.lhs == "Statement" && state.dot == state.prod.rhs.size() && state.start == currentPos) {
+                            root->children.push_back(buildStatement(chart, tokens, currentPos, i));
+                            currentPos = i;
+                            found = true;
+                            break;
+                        }
                     }
                 }
             }
-            if (!foundSemi) {
+            if (!found) {
                 std::string context;
                 for (size_t j = currentPos; j < std::min(currentPos + 10, tokens.size()); j++)
                     context += tokens[j].value + " ";
@@ -624,7 +615,6 @@ void collectDeclarations(const ASTNode& node, std::map<std::string, std::vector<
     if (node.type != "StatementList")
         return;
     for (const auto& child : node.children) {
-        std::cout << "Processing: " << child->type << "\n";
         if (child->type == "Declaration") {
             if (!child->children.empty() && child->children[0]->type == "IDENTIFIER")
                 declared_vars[child->children[0]->value] = {};
@@ -771,7 +761,7 @@ void generateCode(const ASTNode& node, std::vector<Instruction>& code, int& temp
     auto gen_temp = [&temp_count]() { return "t" + std::to_string(temp_count++); };
     auto gen_label = [&label_count]() { return "L" + std::to_string(label_count++); };
     GenExpr gen_expr(code, gen_temp, declared_vars);
-    for (const auto&MarkDownchild : node.children) {
+    for (const auto& child : node.children) {
         if (child->type == "Declaration" && child->children.size() > 1) {
             std::string result = gen_expr(*child->children[1]);
             code.emplace_back("=", result, "", child->children[0]->value);
