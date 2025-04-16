@@ -107,6 +107,7 @@ Token getPunctuation(const std::string& input, size_t& i) {
 }
 
 std::vector<Token> tokenize(const std::string& input) {
+    using enum TokenType;
     std::vector<Token> tokens;
     size_t i = 0;
     while (i < input.length()) {
@@ -129,7 +130,7 @@ std::vector<Token> tokenize(const std::string& input) {
             throw CompilerException(std::format("Invalid character: '{}'", c));
         }
     }
-    tokens.emplace_back(TokenType::EOF_TOKEN, "");
+    tokens.emplace_back(EOF_TOKEN, "");
     return tokens;
 }
 
@@ -191,14 +192,15 @@ private:
     }
 
     std::string tokenTypeToString(TokenType type) const {
+        using enum TokenType;
         switch (type) {
-            case TokenType::KEYWORD: return "KEYWORD";
-            case TokenType::IDENTIFIER: return "IDENTIFIER";
-            case TokenType::NUMBER: return "NUMBER";
-            case TokenType::OPERATOR: return "OPERATOR";
-            case TokenType::PUNCTUATION: return "PUNCTUATION";
-            case TokenType::STRING_LITERAL: return "STRING_LITERAL";
-            case TokenType::EOF_TOKEN: return "EOF_TOKEN";
+            case KEYWORD: return "KEYWORD";
+            case IDENTIFIER: return "IDENTIFIER";
+            case NUMBER: return "NUMBER";
+            case OPERATOR: return "OPERATOR";
+            case PUNCTUATION: return "PUNCTUATION";
+            case STRING_LITERAL: return "STRING_LITERAL";
+            case EOF_TOKEN: return "EOF_TOKEN";
             default: return "";
         }
     }
